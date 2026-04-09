@@ -1,0 +1,221 @@
+basePath: /api
+definitions:
+  dto.LoginRequest:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    type: object
+  dto.LoginResponse:
+    properties:
+      email:
+        type: string
+      role:
+        type: string
+      token:
+        type: string
+    type: object
+  dto.RegisterRequest:
+    properties:
+      email:
+        type: string
+      password:
+        type: string
+    type: object
+  dto.TransactionRequest:
+    properties:
+      amount:
+        type: number
+      from_account:
+        type: string
+      to_account:
+        type: string
+    type: object
+  models.Account:
+    properties:
+      accountNumber:
+        type: string
+      balance:
+        type: number
+      created_at:
+        type: string
+      id:
+        type: string
+      status:
+        description: ACTIVE, INACTIVE
+        type: string
+      user_id:
+        type: string
+    type: object
+  models.User:
+    properties:
+      created_at:
+        type: string
+      email:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      role:
+        description: CUSTOMER || ADMIN
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: Simple Banking System POC using Golang, Gin, MongoDB
+  termsOfService: http://swagger.io/terms
+  title: Banking System API
+  version: "1.0"
+paths:
+  /account/:
+    post:
+      description: Create account for logged-in user
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.Account'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Create new bank account
+      tags:
+      - Account
+  /account/{removeAccount}:
+    delete:
+      description: Remove account by account number
+      parameters:
+      - description: Account Number
+        in: path
+        name: removeAccount
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Delete account
+      tags:
+      - Account
+  /account/accountNumber:
+    get:
+      description: Fetch account by account number
+      parameters:
+      - description: Account Number
+        in: path
+        name: accountNumber
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.Account'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Get account details
+      tags:
+      - account
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Login Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.LoginResponse'
+      summary: Login user
+      tags:
+      - Auth
+  /auth/register:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Register Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.User'
+      summary: Register user
+      tags:
+      - Auth
+  /transactions/transfer:
+    post:
+      description: Transfer amount between accounts
+      parameters:
+      - description: Transfer Payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/dto.TransactionRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Transfer money
+      tags:
+      - Transactions
+schemes:
+- http
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

@@ -1,0 +1,50 @@
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:8.0
+    container_name: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.Dev
+    container_name: banking-backend-dev
+    ports:
+      - "8080:8080"
+    environment:
+      - APP_NAME=Banking-System
+      - APP_PORT=8080
+
+      # MongoDB
+      - DB_HOST=mongo
+      - DB_PORT=27017
+      - DB_NAME=banking
+
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+
+      # JWT
+      - JWT_SECRET=supersecretkey
+    volumes:
+      - .:/app
+    depends_on:
+      - mongo
+      - redis
+    restart: unless-stopped
+
+volumes:
+  mongo_data:

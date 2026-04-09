@@ -1,0 +1,85 @@
+[
+    {
+        "email": "user@example.com",
+        "password": "securepassword"
+    },
+    {
+        "application_id": "app123",
+        "account_type": "SAVINGS",
+        "checker_id": "checker123",
+        "target_user_id": "user123",
+        "initial_balance": 10000,
+        "nominee": [
+            {
+                "first_name": "John",
+                "last_name": "Doe",
+                "mobile": "9876543210",
+                "email": "john@example.com",
+                "dob": "1990-01-01T00:00:00Z"
+            }
+        ]
+    },
+    {
+        "checker_id": "65f1a2b3c4d5e6f7890a1234",
+        "new_balance": 15000,
+        "nominee": [
+            {
+                "first_name": "Jane",
+                "last_name": "Doe",
+                "mobile": "9123456789",
+                "email": "jane@example.com",
+                "dob": "1992-05-10T00:00:00Z"
+            }
+        ]
+    },
+    {
+        "nominee_id": "65f1a2b3c4d5e6f7890a1234",
+        "relation": "SPOUSE",
+        "is_primary": true,
+        "nominee_percentage": 100
+    },
+    {
+        "reason": "Invalid nominee details"
+    },
+    {
+        "first_name": "John",
+        "last_name": "Doe",
+        "mobile": "9876543210",
+        "email": "john@example.com",
+        "dob": "1990-01-01T00:00:00Z"
+    },
+    {
+        "_id": "65f1a2b3c4d5e6f7890a9999",
+        "entity_type": "ACCOUNT_NOMINEE",
+        "action": "CREATE",
+        "payload": "base64-encoded-payload",
+        "status": "PENDING",
+        "created_by": "65f1a2b3c4d5e6f7890a1111",
+        "created_at": "2026-03-27T10:00:00Z",
+        "updated_at": "2026-03-27T10:05:00Z",
+        "approved_by": "65f1a2b3c4d5e6f7890a2222",
+        "approved_at": "2026-03-27T11:00:00Z",
+        "rejected_by": "65f1a2b3c4d5e6f7890a3333",
+        "rejected_at": "2026-03-27T11:10:00Z",
+        "rejection_reason": "Invalid data"
+    },
+    {
+        "account_number": "ACC123456",
+        "nominee_id": "65f1a2b3c4d5e6f7890a1234",
+        "nominee_percentage": 100,
+        "is_primary": true,
+        "relation": "SPOUSE",
+        "created_by": "65f1a2b3c4d5e6f7890a1111"
+    },
+    {
+        "mapping_id": "65f1a2b3c4d5e6f7890a5678",
+        "nominee_percentage": 60,
+        "is_primary": false,
+        "relation": "SIBLING",
+        "updated_by": "65f1a2b3c4d5e6f7890a2222"
+    },
+    {
+        "mapping_id": "65f1a2b3c4d5e6f7890a5678",
+        "deleted_by": "65f1a2b3c4d5e6f7890a3333"
+    }
+]
