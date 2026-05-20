@@ -6,14 +6,15 @@ import (
 	"banking-system-backend/internal/models"
 	repoInterfaces "banking-system-backend/internal/repositories/interfaces"
 	"banking-system-backend/internal/repositories/mongorepo"
+	"banking-system-backend/internal/requestctx"
 	serviceInterfaces "banking-system-backend/internal/services/interfaces"
 	"context"
-	"log"
 	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.uber.org/zap"
 )
 
 type NomineeService struct {
@@ -41,7 +42,8 @@ func (s *NomineeService) getCustomerID(ctx context.Context, userID primitive.Obj
 }
 
 func (s *NomineeService) CreateNominee(ctx context.Context, loggedInUserID primitive.ObjectID, req dto.NomineeRequest) (*models.Nominee, error) {
-	log.Println("NomineeService CreateNominee() started")
+	log := requestctx.GetLogger(ctx).With(zap.String("user_id", loggedInUserID.Hex()))
+	log.Info("create nominee request received")
 
 	customerID, err := s.getCustomerID(ctx, loggedInUserID)
 	if err != nil {
@@ -53,13 +55,16 @@ func (s *NomineeService) CreateNominee(ctx context.Context, loggedInUserID primi
 	// CHECK IF ALREADY EXISTS
 	existing, err := s.nomineeRepo.FindByMobileOrEmail(ctx, customerID, req.Mobile, email)
 	if err != nil {
+		log.Warn("failed to find existing nominee", zap.Error(err))
 		return nil, err
 	}
 
-	log.Println(" exist existing nominee : ", existing)
+	log.Info("nominee already exists",
+		zap.String("nominee_id", existing.ID.Hex()),
+	)
 
 	if existing != nil {
-		log.Println("Nominee already exists, reusing.")
+		log.Info("Nominee already exists, reusing.")
 		//return existing, nil
 		return nil, constants.ErrNomineeMobileOrEmailAlreadyExists
 	}
@@ -78,14 +83,15 @@ func (s *NomineeService) CreateNominee(ctx context.Context, loggedInUserID primi
 
 	// CREATE NEW
 	nominee := &models.Nominee{
-		ID:         primitive.NewObjectID(),
-		CustomerID: customerID,
-		FirstName:  req.FirstName,
-		LastName:   req.LastName,
-		DOB:        req.DOB,
-		Mobile:     req.Mobile,
-		Email:      email,
-		Status:     constants.NomineeStatusActive,
+		ID:           primitive.NewObjectID(),
+		CustomerID:   customerID,
+		FirstName:    req.FirstName,
+		LastName:     req.LastName,
+		GuardianName: req.GuardianName,
+		DOB:          req.DOB,
+		Mobile:       req.Mobile,
+		Email:        email,
+		Status:       constants.NomineeStatusActive,
 		AuditMetadata: models.AuditMetadata{
 			CreatedBy: loggedInUserID, // Assuming user is creating the nomniee
 			CreatedAt: now,
@@ -96,15 +102,18 @@ func (s *NomineeService) CreateNominee(ctx context.Context, loggedInUserID primi
 
 	err = s.nomineeRepo.Create(ctx, nominee)
 	if err != nil {
+		log.Error("failed to create nominee", zap.Error(err))
 		return nil, err
 	}
 
-	log.Println("NomineeService CreateNominee() end")
+	log.Info("NomineeService CreateNominee() end")
 	return nominee, nil
 }
 
 func (s *NomineeService) UpdateNominee(ctx context.Context, nomineeID, userID primitive.ObjectID, req dto.NomineeRequest) (*models.Nominee, error) {
-	log.Println("NomineeService UpdateNominee() started")
+	log := requestctx.GetLogger(ctx).With(zap.String("nominee_id", nomineeID.Hex()), zap.String("user_id", userID.Hex()))
+	log.Info("updating nominee")
+
 	customerID, err := s.getCustomerID(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -112,15 +121,18 @@ func (s *NomineeService) UpdateNominee(ctx context.Context, nomineeID, userID pr
 
 	nominee, err := s.nomineeRepo.GetNomineeByIDAndCustomerID(ctx, nomineeID, customerID)
 	if err != nil {
+		log.Error("failed to get nominee by ID", zap.Error(err))
 		return nil, err
 	}
 
 	// Safety check
 	if nominee == nil {
+		log.Error("nominee not found", zap.String("nominee_id", nomineeID.Hex()))
 		return nil, constants.ErrNomineeNotFound
 	}
 
 	if nominee.CreatedBy != userID {
+		log.Error("unauthorized access", zap.String("user_id", userID.Hex()))
 		return nil, constants.ErrUnauthorized
 	}
 
@@ -139,16 +151,18 @@ func (s *NomineeService) UpdateNominee(ctx context.Context, nomineeID, userID pr
 		return nil, err
 	}
 
-	log.Println("NomineeService UpdateNominee() end")
+	log.Info("nominee updated successfully")
 	return updatedNominee, nil
 }
 
 func (s *NomineeService) SoftDeleteNominee(ctx context.Context, nomineeID, userID primitive.ObjectID) error {
-	log.Println("NomineeService SoftDeleteNominee() started")
+	log := requestctx.GetLogger(ctx).With(zap.String("nominee_id", nomineeID.Hex()), zap.String("user_id", userID.Hex()))
+	log.Info("NomineeService SoftDeleteNominee() started")
 
 	// check if nominee is mapped to account
 	accountNominee, err := s.accountNomineeRepo.GetByNomineeID(ctx, nomineeID)
 	if err != nil && err != constants.ErrNomineeNotFound {
+		log.Error("failed to get account-nominee mapping", zap.Error(err))
 		return err
 	}
 
@@ -159,6 +173,7 @@ func (s *NomineeService) SoftDeleteNominee(ctx context.Context, nomineeID, userI
 
 	nominee, err := s.nomineeRepo.GetByID(ctx, nomineeID)
 	if err != nil {
+		log.Error("failed to get nominee by ID", zap.Error(err))
 		return err
 	}
 
@@ -182,15 +197,17 @@ func (s *NomineeService) SoftDeleteNominee(ctx context.Context, nomineeID, userI
 
 	err = s.nomineeRepo.SoftDelete(ctx, nomineeID, updateFields)
 	if err != nil {
+		log.Error("failed to soft delete nominee", zap.Error(err))
 		return err
 	}
 
-	log.Println("NomineeService SoftDeleteNominee() end")
+	log.Info("NomineeService SoftDeleteNominee() end")
 	return nil
 }
 
 func (s *NomineeService) GetNomineeByID(ctx context.Context, nomineeID, userID primitive.ObjectID) (*models.Nominee, error) {
-	log.Println("NomineeService GetNomineeByID() started")
+	log := requestctx.GetLogger(ctx).With(zap.String("nominee_id", nomineeID.Hex()), zap.String("user_id", userID.Hex()))
+	log.Info("NomineeService GetNomineeByID() started")
 
 	customerID, err := s.getCustomerID(ctx, userID)
 	if err != nil {
@@ -199,6 +216,7 @@ func (s *NomineeService) GetNomineeByID(ctx context.Context, nomineeID, userID p
 
 	nominee, err := s.nomineeRepo.GetNomineeByIDAndCustomerID(ctx, nomineeID, customerID)
 	if err != nil {
+		log.Error("failed to get nominee by ID", zap.Error(err))
 		return nil, err
 	}
 
@@ -206,12 +224,13 @@ func (s *NomineeService) GetNomineeByID(ctx context.Context, nomineeID, userID p
 		return nil, constants.ErrUnauthorized
 	}
 
-	log.Println("NomineeService GetNomineeByID() end")
+	log.Info("NomineeService GetNomineeByID() end")
 	return nominee, nil
 }
 
 func (s *NomineeService) ListNominees(ctx context.Context, userID primitive.ObjectID) ([]models.Nominee, error) {
-	log.Println("NomineeService ListNominees() started")
+	log := requestctx.GetLogger(ctx).With(zap.String("user_id", userID.Hex()))
+	log.Info("NomineeService ListNominees() started")
 
 	customerID, err := s.getCustomerID(ctx, userID)
 	if err != nil {
@@ -221,10 +240,11 @@ func (s *NomineeService) ListNominees(ctx context.Context, userID primitive.Obje
 	var nominees []models.Nominee
 	nominees, err = s.nomineeRepo.ListNomineesByCustomer(ctx, customerID)
 	if err != nil {
+		log.Error("failed to list nominees", zap.Error(err))
 		return nil, err
 	}
 
-	log.Println("NomineeService ListNominees() end")
+	log.Info("NomineeService ListNominees() end")
 	return nominees, nil
 
 }

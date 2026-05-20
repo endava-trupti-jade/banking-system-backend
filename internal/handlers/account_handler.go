@@ -3,14 +3,15 @@ package handlers
 import (
 	"banking-system-backend/constants"
 	"banking-system-backend/internal/dto"
+	"banking-system-backend/internal/requestctx"
 	serviceInterfaces "banking-system-backend/internal/services/interfaces"
 	"banking-system-backend/pkg/utils"
-	"log"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.uber.org/zap"
 )
 
 type AccountHandler struct {
@@ -31,39 +32,39 @@ func NewAccountHandler(service serviceInterfaces.AccountServiceInterface) *Accou
 // @Failure 401 {object} map[string]string
 // @Router /account/ [POST]
 func (h *AccountHandler) CreateAccount(c *gin.Context) {
-	log.Println("AccountHandler CreateAccount() started")
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("create account request received")
+
 	var req dto.CreateAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Println("req : ", req, " err ", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Warn("failed binding request",
+			zap.Error(err),
+		)
+		utils.Error400(c, err)
 		return
 	}
 
-	userID := c.MustGet("userID").(primitive.ObjectID)
-	if userID == primitive.NilObjectID {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": constants.ErrUnauthorized.Error()})
-		return
-	}
+	authCtx := requestctx.MustGetAuth(c)
 
-	role := c.GetString("role")
-	if role == "" {
-		c.JSON(http.StatusForbidden, gin.H{"error": constants.ErrRoleRequired.Error()})
-		return
-	}
-
-	account, err := h.accountService.CreateAccount(c.Request.Context(), role, userID, req)
+	account, err := h.accountService.CreateAccount(ctx, authCtx.Role, authCtx.UserID, req)
 	if err != nil {
-		log.Println("account : ", account, " err ", err)
-		if err == constants.ErrAccCreationOwnershipDenied {
-			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		if errors.Is(err, constants.ErrAccCreationOwnershipDenied) {
+			log.Warn("account creation ownership denied",
+				zap.Error(err),
+			)
+			utils.Error403(c, err)
 			return
 		}
+		log.Error("failed to create account",
+			zap.Error(err),
+		)
 		utils.Error500(c, err)
 		return
 	}
 
-	log.Println("AccountHandler CreateAccount() end")
-	c.JSON(http.StatusCreated, account)
+	log.Info("account created successfully", zap.String("account_number", account.AccountNumber))
+	utils.Success(c, http.StatusCreated, account)
 }
 
 // GetAccount godoc
@@ -76,39 +77,51 @@ func (h *AccountHandler) CreateAccount(c *gin.Context) {
 // @Failure 404 {object} map[string]string
 // @Router /account/{accountNumber} [GET]
 func (h *AccountHandler) GetAccount(c *gin.Context) {
-	log.Println("AccountHandler GetAccount() started")
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("get account request received")
 
 	accountNumber := strings.TrimSpace(c.Param("accountNumber"))
 	if accountNumber == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": constants.ErrAccNumRequired.Error()})
+		utils.Error400(c, constants.ErrAccNumRequired)
+		log.Warn("account number required")
 		return
 	}
 
-	userID := c.MustGet("userID").(primitive.ObjectID)
-	if userID == primitive.NilObjectID {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": constants.ErrUnauthorized.Error()})
-		return
-	}
+	authCtx := requestctx.MustGetAuth(c)
 
-	role := c.GetString("role")
-	if role == "" {
-		c.JSON(http.StatusForbidden, gin.H{"error": constants.ErrRoleRequired.Error()})
-		return
-	}
-
-	account, err := h.accountService.GetAccount(c.Request.Context(), accountNumber, role, userID)
-	log.Println(" AccountHandler GetAccount : ", account, "=>", err)
+	account, err := h.accountService.GetAccount(ctx, accountNumber, authCtx.Role, authCtx.UserID)
 	if err != nil {
-		if err == constants.ErrOwnershipViolation {
-			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
-		} else {
-			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		if errors.Is(err, constants.ErrOwnershipViolation) {
+			log.Warn("ownership violation for account",
+				zap.String("account_number", accountNumber),
+				zap.Error(err),
+			)
+
+			utils.Error403(c, err)
+			return
 		}
+
+		if errors.Is(err, constants.ErrAccNotFound) {
+			log.Warn("account not found",
+				zap.String("account_number", accountNumber),
+				zap.Error(err),
+			)
+
+			utils.Error404(c, err)
+			return
+		}
+
+		log.Error("failed to fetch account",
+			zap.String("account_number", accountNumber),
+			zap.Error(err),
+		)
+		utils.Error500(c, err)
 		return
 	}
 
-	log.Println("AccountHandler GetAccount() end")
-	c.JSON(http.StatusOK, account)
+	log.Info("account fetched successfully", zap.String("account_number", accountNumber))
+	utils.Success(c, http.StatusOK, account)
 }
 
 //UpdateAccount godoc
@@ -121,43 +134,61 @@ func (h *AccountHandler) GetAccount(c *gin.Context) {
 // @Failure 404 {object} map[string]string
 // @Router /account/{accountNumber} [PUT]
 func (h *AccountHandler) UpdateAccount(c *gin.Context) {
-	log.Println("AccountHandler UpdateAccount() started")
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("account update request received")
+
 	accountNumber := strings.TrimSpace(c.Param("accountNumber"))
 	if accountNumber == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": constants.ErrAccNumRequired.Error()})
+		utils.Error400(c, constants.ErrAccNumRequired)
+		log.Warn("account number required")
 		return
 	}
 
-	userID := c.MustGet("userID").(primitive.ObjectID)
-	if userID == primitive.NilObjectID {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": constants.ErrUnauthorized.Error()})
-		return
-	}
-
-	role := c.GetString("role")
-	if role == "" {
-		c.JSON(http.StatusForbidden, gin.H{"error": constants.ErrRoleRequired.Error()})
-		return
-	}
+	authCtx := requestctx.MustGetAuth(c)
 
 	var req dto.UpdateAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Warn("failed to bind update account request",
+			zap.Error(err),
+		)
+		utils.Error400(c, err)
 		return
 	}
 
-	account, err := h.accountService.UpdateAccount(c.Request.Context(), accountNumber, role, userID, req)
+	account, err := h.accountService.UpdateAccount(ctx, accountNumber, authCtx.Role, authCtx.UserID, req)
 	if err != nil {
-		if err == constants.ErrOwnershipViolation {
-			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
-		} else {
-			c.JSON(http.StatusNotFound, gin.H{"error": constants.ErrAccNotFound.Error()})
+		if errors.Is(err, constants.ErrOwnershipViolation) {
+			log.Warn("ownership violation for account",
+				zap.String("account_number", accountNumber),
+				zap.Error(err),
+			)
+
+			utils.Error403(c, err)
+			return
 		}
+
+		if errors.Is(err, constants.ErrAccNotFound) {
+			log.Warn("account not found",
+				zap.String("account_number", accountNumber),
+				zap.Error(err),
+			)
+
+			utils.Error404(c, err)
+			return
+		}
+
+		log.Error("failed to update account",
+			zap.String("account_number", accountNumber),
+			zap.Error(err),
+		)
+
+		utils.Error500(c, err)
 		return
 	}
 
-	log.Println("AccountHandler UpdateAccount() end")
-	c.JSON(http.StatusOK, account)
+	log.Info("account updated successfully", zap.String("account_number", accountNumber))
+	utils.Success(c, http.StatusOK, account)
 }
 
 // DeleteAccount godoc
@@ -170,36 +201,50 @@ func (h *AccountHandler) UpdateAccount(c *gin.Context) {
 // @Failure 404  {object} map[string]string
 // @Router /account/{accountNumber} [DELETE]
 func (h *AccountHandler) DeleteAccount(c *gin.Context) {
-	log.Println("AccountHandler DeleteAccount() started")
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("account delete request received")
 
 	accountNumber := strings.TrimSpace(c.Param("accountNumber"))
 	if accountNumber == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": constants.ErrAccNumRequired.Error()})
+		log.Warn("account number required")
+		utils.Error400(c, constants.ErrAccNumRequired)
 		return
 	}
 
-	userID := c.MustGet("userID").(primitive.ObjectID)
-	if userID == primitive.NilObjectID {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": constants.ErrUnauthorized.Error()})
-		return
-	}
+	authCtx := requestctx.MustGetAuth(c)
 
-	role := c.GetString("role")
-	if role == "" {
-		c.JSON(http.StatusForbidden, gin.H{"error": constants.ErrRoleRequired.Error()})
-		return
-	}
-
-	err := h.accountService.DeleteAccount(c.Request.Context(), accountNumber, role, userID)
+	err := h.accountService.DeleteAccount(ctx, accountNumber, authCtx.Role, authCtx.UserID)
 	if err != nil {
-		if err == constants.ErrOwnershipViolation {
-			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
-		} else {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if errors.Is(err, constants.ErrOwnershipViolation) {
+			log.Warn("ownership violation for account",
+				zap.String("account_number", accountNumber),
+				zap.Error(err),
+			)
+
+			utils.Error403(c, err)
+			return
 		}
+
+		if errors.Is(err, constants.ErrAccNotFound) {
+			log.Warn("account not found",
+				zap.String("account_number", accountNumber),
+				zap.Error(err),
+			)
+
+			utils.Error404(c, err)
+			return
+		}
+
+		log.Error("failed to delete account",
+			zap.String("account_number", accountNumber),
+			zap.Error(err),
+		)
+
+		utils.Error500(c, err)
 		return
 	}
 
-	log.Println("AccountHandler DeleteAccount() end")
-	c.JSON(http.StatusOK, gin.H{"message": constants.MsgAccountDeletion})
+	log.Info("account deleted successfully", zap.String("account_number", accountNumber))
+	utils.SuccessMessage(c, http.StatusOK, constants.MsgAccountDeletion)
 }

@@ -3,10 +3,14 @@ package handlers
 import (
 	"banking-system-backend/constants"
 	"banking-system-backend/internal/dto"
+	"banking-system-backend/internal/requestctx"
 	serviceInterfaces "banking-system-backend/internal/services/interfaces"
+	"banking-system-backend/pkg/utils"
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"net/http"
+	"go.uber.org/zap"
 )
 
 type BeneficiaryHandler struct {
@@ -19,99 +23,166 @@ func NewBeneficiaryHandler(s serviceInterfaces.BeneficiaryServiceInterface) *Ben
 }
 
 func (h *BeneficiaryHandler) CreateBeneficiary(c *gin.Context) {
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("create beneficiary request received")
+
 	var req dto.BeneficiaryRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Warn("failed to bind create beneficiary request",
+			zap.Error(err),
+		)
+		utils.Error400(c, err)
 		return
 	}
 
-	userID := c.MustGet("userID").(primitive.ObjectID)
-	if userID == primitive.NilObjectID {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": constants.ErrUnauthorized.Error()})
-		return
-	}
+	authCtx := requestctx.MustGetAuth(c)
 
-	res, err := h.beneficiaryService.CreateBeneficiary(c.Request.Context(), userID, req)
+	res, err := h.beneficiaryService.CreateBeneficiary(ctx, authCtx.UserID, req)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Warn("failed to create beneficiary",
+			zap.Error(err),
+		)
+		utils.HandleServiceError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, res)
+	log.Info("beneficiary created successfully",
+		zap.String("beneficiary_id", res.ID.Hex()),
+	)
+	utils.Success(c, http.StatusCreated, res)
 }
 
 func (h *BeneficiaryHandler) DeleteBeneficiary(c *gin.Context) {
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("delete beneficiary request received")
+
 	idParam := c.Param("id")
 
-	beneficiaryID, _ := primitive.ObjectIDFromHex(idParam)
-	userID := c.MustGet("userID").(primitive.ObjectID)
-
-	err := h.beneficiaryService.SoftDeleteBeneficiary(c.Request.Context(), beneficiaryID, userID)
+	beneficiaryID, err := utils.ParseObjectID(idParam, "beneficiary ID")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Warn("invalid beneficiary ID",
+			zap.String("beneficiary_id", idParam),
+			zap.Error(err),
+		)
+		utils.HandleServiceError(c, constants.ErrInvalidBeneficiaryID)
+		return
+	}
+	authCtx := requestctx.MustGetAuth(c)
+
+	err = h.beneficiaryService.SoftDeleteBeneficiary(ctx, beneficiaryID, authCtx.UserID)
+	if err != nil {
+		log.Warn("failed to delete beneficiary",
+			zap.String("beneficiary_id", idParam),
+			zap.Error(err),
+		)
+		utils.HandleServiceError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+	log.Info("beneficiary deleted successfully",
+		zap.String("beneficiary_id", idParam),
+	)
+	utils.SuccessMessage(c, http.StatusOK, "beneficiary deleted successfully")
 }
 
 func (h *BeneficiaryHandler) GetBeneficiary(c *gin.Context) {
 	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("get beneficiary request received")
 
 	beneficiaryIDParam := c.Param("id")
-	beneficiaryID, err := primitive.ObjectIDFromHex(beneficiaryIDParam)
+	beneficiaryID, err := utils.ParseObjectID(beneficiaryIDParam, "beneficiary ID")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid beneficiary id"})
+		log.Warn("invalid beneficiary ID",
+			zap.String("beneficiary_id", beneficiaryIDParam),
+			zap.Error(err),
+		)
+		utils.HandleServiceError(c, constants.ErrInvalidBeneficiaryID)
 		return
 	}
 
-	userID := c.MustGet("userID").(primitive.ObjectID)
+	authCtx := requestctx.MustGetAuth(c)
 
-	beneficiary, err := h.beneficiaryService.GetBeneficiaryByID(ctx, beneficiaryID, userID)
+	beneficiary, err := h.beneficiaryService.GetBeneficiaryByID(ctx, beneficiaryID, authCtx.UserID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Warn("failed to get beneficiary",
+			zap.String("beneficiary_id", beneficiaryIDParam),
+			zap.Error(err),
+		)
+		utils.HandleServiceError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, beneficiary)
+	log.Info("beneficiary retrieved successfully",
+		zap.String("beneficiary_id", beneficiary.ID.Hex()),
+	)
+	utils.Success(c, http.StatusOK, beneficiary)
 }
 
 func (h *BeneficiaryHandler) UpdateBeneficiary(c *gin.Context) {
 	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("update beneficiary request received")
 
 	beneficiaryIDParam := c.Param("id")
 	beneficiaryID, err := primitive.ObjectIDFromHex(beneficiaryIDParam)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid beneficiary id"})
+		log.Warn("invalid beneficiary ID",
+			zap.String("beneficiary_id", beneficiaryIDParam),
+			zap.Error(err),
+		)
+		utils.Error400(c, constants.ErrInvalidBeneficiaryID)
 		return
 	}
 
 	var req dto.BeneficiaryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Warn("failed to bind update beneficiary request",
+			zap.Error(err),
+		)
+		utils.Error400(c, err)
 		return
 	}
 
-	userID := c.MustGet("userID").(primitive.ObjectID)
+	authCtx := requestctx.MustGetAuth(c)
 
-	updated, err := h.beneficiaryService.UpdateBeneficiary(ctx, beneficiaryID, userID, req)
+	updated, err := h.beneficiaryService.UpdateBeneficiary(ctx, beneficiaryID, authCtx.UserID, req)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Warn("failed to update beneficiary",
+			zap.String("beneficiary_id", beneficiaryIDParam),
+			zap.Error(err),
+		)
+		utils.HandleServiceError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, updated)
+	log.Info("beneficiary updated successfully",
+		zap.String("beneficiary_id", updated.ID.Hex()),
+	)
+	utils.Success(c, http.StatusOK, updated)
 }
 
 func (h *BeneficiaryHandler) ListBeneficiaries(c *gin.Context) {
-	userID := c.MustGet("userID").(primitive.ObjectID)
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("list beneficiaries request received")
 
-	res, err := h.beneficiaryService.ListBeneficiaries(c.Request.Context(), userID)
+	authCtx := requestctx.MustGetAuth(c)
+
+	res, err := h.beneficiaryService.ListBeneficiaries(ctx, authCtx.UserID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Warn("failed to list beneficiaries",
+			zap.Error(err),
+		)
+		utils.Error500(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, res)
+	log.Info("beneficiaries listed successfully",
+		zap.Int("count", len(res)),
+	)
+	utils.Success(c, http.StatusOK, res)
 }

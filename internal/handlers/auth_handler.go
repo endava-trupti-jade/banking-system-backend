@@ -3,13 +3,15 @@ package handlers
 import (
 	"banking-system-backend/constants"
 	"banking-system-backend/internal/dto"
+	"banking-system-backend/internal/requestctx"
 	// "banking-system-backend/internal/services"
 	serviceInterfaces "banking-system-backend/internal/services/interfaces"
 	"banking-system-backend/pkg/utils"
 	"errors"
-	"github.com/gin-gonic/gin"
-	"log"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 type AuthHandler struct {
@@ -29,28 +31,44 @@ func NewAuthHandler(service serviceInterfaces.AuthServiceInterface) *AuthHandler
 // @Success 200 {object} models.User
 // @Router /auth/register [POST]
 func (h *AuthHandler) Register(c *gin.Context) {
-	log.Println("AuthHandler Register() started")
+	//log.Println("AuthHandler Register() started")
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("create user request received")
 
 	var req dto.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Warn("invalid register request payload",
+			zap.Error(err),
+		)
+		utils.Error400(c, err)
 		return
 	}
 
-	if err := h.authService.Register(c.Request.Context(), req); err != nil {
-		if err != nil {
-			if errors.Is(err, constants.ErrEmailExists) {
-				c.JSON(http.StatusConflict, gin.H{"error": constants.ErrEmailExists.Error()})
-				return
-			}
+	if err := h.authService.Register(ctx, req); err != nil {
+		if errors.Is(err, constants.ErrEmailExists) {
+			log.Warn("registration failed email already exists",
+				zap.String("email", req.Email),
+			)
+
+			utils.Error409(c, constants.ErrEmailExists)
+			return
 		}
+
+		log.Error("registration failed",
+			zap.String("email", req.Email),
+			zap.Error(err),
+		)
 		utils.Error500(c, err)
+
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"message": constants.MsgUserRegistration})
+	log.Info("user registered successfully",
+		zap.String("email", req.Email),
+	)
+	utils.SuccessMessage(c, http.StatusCreated, constants.MsgUserRegistration)
 
-	log.Println("AuthHandler Register() end")
 }
 
 // Login godoc
@@ -62,26 +80,38 @@ func (h *AuthHandler) Register(c *gin.Context) {
 // @Success 200 {object} dto.LoginResponse
 // @Router /auth/login [POST]
 func (h *AuthHandler) Login(c *gin.Context) {
-	log.Println("AuthHandler Login() started")
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("login request received")
 
 	var req dto.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Warn("invalid login request payload",
+			zap.Error(err),
+		)
+		utils.Error400(c, err)
 		return
 	}
 
-	res, err := h.authService.Login(c.Request.Context(), req)
+	res, err := h.authService.Login(ctx, req)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": constants.ErrInvalidCredentials.Error()})
+		log.Warn("login failed invalid credentials",
+			zap.String("email", utils.NormalizeEmail(req.Email)),
+			zap.String("client_ip", c.ClientIP()),
+		)
+		utils.Error401(c, constants.ErrInvalidCredentials)
 		return
 	}
 
-	var response dto.LoginResponse
-	response.Email = req.Email
-	response.Role = res.Role
-	response.Token = res.Token
+	response := dto.LoginResponse{
+		Email: utils.NormalizeEmail(req.Email),
+		Role:  res.Role,
+		Token: res.Token,
+	}
 
-	c.JSON(http.StatusOK, response)
+	log.Info("user login successful",
+		zap.String("email", utils.NormalizeEmail(req.Email)),
+	)
+	utils.Success(c, http.StatusOK, response)
 
-	log.Println("AuthHandler Login() end")
 }

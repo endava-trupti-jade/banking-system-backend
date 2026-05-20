@@ -7,12 +7,13 @@ import (
 	"banking-system-backend/internal/dto"
 	"banking-system-backend/internal/models"
 	repoInterfaces "banking-system-backend/internal/repositories/interfaces"
+	"banking-system-backend/internal/requestctx"
 	"banking-system-backend/internal/validators"
 	"context"
-	"log"
 	"sync"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.uber.org/zap"
 )
 
 type AccountBeneficiaryService struct {
@@ -73,6 +74,12 @@ func (s *AccountBeneficiaryService) AddAccountBeneficiary(
 	role, accountNumber string,
 	req dto.AccountBeneficiaryRequest,
 ) (primitive.ObjectID, error) {
+	log := requestctx.GetLogger(ctx).With(
+		zap.String("account_number", accountNumber),
+		zap.String("user_id", userID.Hex()),
+		zap.String("role", role),
+	)
+	log.Info("adding account beneficiary")
 
 	lock := s.getAccountLock(accountNumber)
 	lock.Lock()
@@ -85,11 +92,17 @@ func (s *AccountBeneficiaryService) AddAccountBeneficiary(
 
 	account, customerID, err := s.validateAccountAccess(ctx, userID, role, accountNumber)
 	if err != nil {
+		log.Warn("account access validation failed",
+			zap.Error(err),
+		)
 		return primitive.NilObjectID, err
 	}
 
 	beneficiary, err := s.validator.ValidateCreate(ctx, customerID, account.ID, req)
 	if err != nil {
+		log.Warn("failed to validate beneficiary creation",
+			zap.Error(err),
+		)
 		return primitive.NilObjectID, err
 	}
 
@@ -101,6 +114,10 @@ func (s *AccountBeneficiaryService) AddAccountBeneficiary(
 		NickName:  req.NickName,
 		CreatedBy: userID,
 	}
+
+	log.Info("creating approval request for adding account beneficiary",
+		zap.String("beneficiary_id", beneficiary.ID.Hex()),
+	)
 
 	return s.approvalService.CreateRequest(
 		ctx,
@@ -118,6 +135,14 @@ func (s *AccountBeneficiaryService) UpdateAccountBeneficiary(
 	mappingID primitive.ObjectID,
 	req dto.AccountBeneficiaryRequest,
 ) (primitive.ObjectID, error) {
+	log := requestctx.GetLogger(ctx).With(
+		zap.String("account_number", accountNumber),
+		zap.String("user_id", userID.Hex()),
+		zap.String("role", role),
+		zap.String("mapping_id", mappingID.Hex()),
+	)
+
+	log.Info("updating account beneficiary")
 
 	lock := s.getAccountLock(accountNumber)
 	lock.Lock()
@@ -130,6 +155,10 @@ func (s *AccountBeneficiaryService) UpdateAccountBeneficiary(
 
 	mapping, err := s.accountBeneficiaryRepo.GetByID(ctx, mappingID)
 	if err != nil {
+		log.Warn("failed to find beneficiary mapping by ID",
+			zap.Error(err),
+		)
+
 		return primitive.NilObjectID, constants.ErrBeneficiaryMappingNotFound
 	}
 
@@ -139,6 +168,11 @@ func (s *AccountBeneficiaryService) UpdateAccountBeneficiary(
 
 	_, err = s.validator.ValidateUpdate(ctx, customerID, account.ID, mappingID, req)
 	if err != nil {
+		log.Warn("failed to validate beneficiary update",
+			zap.String("mapping_id", mappingID.Hex()),
+			zap.Error(err),
+		)
+
 		return primitive.NilObjectID, err
 	}
 
@@ -149,6 +183,8 @@ func (s *AccountBeneficiaryService) UpdateAccountBeneficiary(
 		NickName:  req.NickName,
 		UpdatedBy: userID,
 	}
+
+	log.Info("creating approval request for updating account beneficiary")
 
 	return s.approvalService.CreateRequest(
 		ctx,
@@ -166,6 +202,13 @@ func (s *AccountBeneficiaryService) SoftDeleteAccountBeneficiary(
 	accountNumber string,
 	mappingID primitive.ObjectID,
 ) (primitive.ObjectID, error) {
+	log := requestctx.GetLogger(ctx)
+	log.Info("soft deleting account beneficiary",
+		zap.String("account_number", accountNumber),
+		zap.String("mapping_id", mappingID.Hex()),
+		zap.String("user_id", userID.Hex()),
+		zap.String("role", role),
+	)
 
 	accountLock := s.getAccountLock(accountNumber)
 	accountLock.Lock()
@@ -178,6 +221,10 @@ func (s *AccountBeneficiaryService) SoftDeleteAccountBeneficiary(
 
 	mapping, err := s.accountBeneficiaryRepo.GetByID(ctx, mappingID)
 	if err != nil {
+		log.Warn("failed to find beneficiary mapping by ID",
+			zap.Error(err),
+		)
+
 		return primitive.NilObjectID, constants.ErrBeneficiaryMappingNotFound
 	}
 
@@ -189,6 +236,8 @@ func (s *AccountBeneficiaryService) SoftDeleteAccountBeneficiary(
 		MappingID: mappingID,
 		DeletedBy: userID,
 	}
+
+	log.Info("creating approval request for soft deleting account beneficiary")
 
 	return s.approvalService.CreateRequest(
 		ctx,
@@ -203,7 +252,6 @@ func (s *AccountBeneficiaryService) getCustomerID(
 	ctx context.Context,
 	userID primitive.ObjectID,
 ) (primitive.ObjectID, error) {
-
 	customer, err := s.customerRepo.GetByUserID(ctx, userID)
 	if err != nil {
 		return primitive.NilObjectID, constants.ErrCustomerNotFound
@@ -217,9 +265,15 @@ func (s *AccountBeneficiaryService) validateAccountAccess(
 	role string,
 	accountNumber string,
 ) (*models.Account, primitive.ObjectID, error) {
+	log := requestctx.GetLogger(ctx).With(
+		zap.String("account_number", accountNumber),
+		zap.String("user_id", userID.Hex()),
+		zap.String("role", role),
+	)
 
 	account, err := s.accountRepo.FindByAccountNumber(ctx, accountNumber)
 	if err != nil {
+		log.Warn("failed to find account by number")
 		return nil, primitive.NilObjectID, constants.ErrAccNotFound
 	}
 
@@ -228,8 +282,6 @@ func (s *AccountBeneficiaryService) validateAccountAccess(
 		return nil, primitive.NilObjectID, err
 	}
 
-	log.Println("account.CustomerID ", account.CustomerID)
-	log.Println("customerID ", customerID)
 	if role == constants.RoleCustomer && account.CustomerID != customerID {
 		return nil, primitive.NilObjectID, constants.ErrUnauthorizedAccountAccess
 	}
@@ -241,11 +293,19 @@ func (s *AccountBeneficiaryService) ListByAccountNumber(
 	ctx context.Context,
 	accountNumber string,
 ) ([]dto.AccountBeneficiaryResponse, error) {
+	log := requestctx.GetLogger(ctx)
+	log.Info("listing account beneficiaries",
+		zap.String("account_number", accountNumber),
+	)
 
 	account, err := s.accountRepo.FindByAccountNumber(ctx, accountNumber)
 	if err != nil {
+		log.Warn("account not found for listing beneficiaries", zap.String("account_number", accountNumber))
+
 		return nil, constants.ErrAccNotFound
 	}
+
+	log.Info("account found for listing beneficiaries", zap.String("account_number", accountNumber), zap.String("account_id", account.ID.Hex()))
 
 	return s.accountBeneficiaryRepo.GetWithDetails(ctx, account.ID)
 }
@@ -254,11 +314,17 @@ func (s *AccountBeneficiaryService) ListAccountBeneficiariesByAccountNumber(
 	ctx context.Context,
 	accountNumber string,
 ) ([]dto.AccountBeneficiaryResponse, error) {
+	log := requestctx.GetLogger(ctx)
+	log.Info("listing account beneficiaries",
+		zap.String("account_number", accountNumber),
+	)
 
 	account, err := s.accountRepo.FindByAccountNumber(ctx, accountNumber)
 	if err != nil {
+		log.Warn("account not found for listing beneficiaries",
+			zap.String("account_number", accountNumber),
+		)
 		return nil, constants.ErrAccNotFound
 	}
-
 	return s.accountBeneficiaryRepo.GetWithDetails(ctx, account.ID)
 }
