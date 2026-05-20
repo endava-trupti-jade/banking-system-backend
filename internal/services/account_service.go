@@ -5,13 +5,15 @@ import (
 	"banking-system-backend/internal/dto"
 	"banking-system-backend/internal/models"
 	repoInterfaces "banking-system-backend/internal/repositories/interfaces"
+	"banking-system-backend/internal/requestctx"
 	serviceInterfaces "banking-system-backend/internal/services/interfaces"
 	"context"
-	"log"
+	"errors"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.uber.org/zap"
 )
 
 type AccountService struct {
@@ -41,13 +43,15 @@ func NewAccountService(
 }
 
 func (s *AccountService) getAccountByNumber(ctx context.Context, accountNumber string) (*models.Account, error) {
-	log.Println("AccountService getAccountByNumber() started")
+	log := requestctx.GetLogger(ctx).With(zap.String("account_number", accountNumber))
+	log.Info("fetching account by account number")
+
 	account, err := s.accountRepo.FindByAccountNumber(ctx, accountNumber)
 	if err != nil {
+		log.Warn("account not found", zap.Error(err))
 		return nil, err
 	}
 
-	log.Println("AccountService getAccountByNumber() end")
 	return account, nil
 	//switch account.Status {
 	//case constants.AccountStatusActive:
@@ -70,6 +74,10 @@ func (s *AccountService) validateCreateAccountRequest(
 	loggedInUserID primitive.ObjectID,
 	req dto.CreateAccountRequest,
 ) (primitive.ObjectID, error) {
+	log := requestctx.GetLogger(ctx).With(
+		zap.String("logged_in_user", loggedInUserID.Hex()),
+		zap.String("role", role),
+	)
 
 	// 1. Validate Ownership Rules
 	if role == constants.RoleCustomer && req.TargetUserID != "" {
@@ -91,21 +99,27 @@ func (s *AccountService) validateCreateAccountRequest(
 	// 2. Validate User Exists
 	_, err := s.userRepo.GetUserByID(ctx, accountOwnerID)
 	if err != nil {
+		log.Warn("invalid user", zap.Error(err))
 		return primitive.NilObjectID, constants.ErrInvalidUser
 	}
 
 	// // Fetch Customer (IMPORTANT CHANGE)
 	customer, err := s.customerRepo.GetByUserID(ctx, accountOwnerID)
 	if err != nil {
+		log.Warn("customer not found", zap.Error(err))
 		return primitive.NilObjectID, constants.ErrCustomerNotFound
 	}
 
 	// 3. KYC Validation
 	if customer.KYCStatus != constants.KYCStatusApproved {
+		log.Warn("customer kyc not approved")
 		return primitive.NilObjectID, constants.ErrInvalidKYCStatus
 	}
 
 	if customer.Status != "ACTIVE" {
+		log.Warn("customer is inactive",
+			zap.String("customer_status", customer.Status),
+		)
 		return primitive.NilObjectID, constants.ErrCustomerInactive
 	}
 
@@ -117,7 +131,10 @@ func (s *AccountService) validateCreateAccountRequest(
 }
 
 func (s *AccountService) CreateAccount(ctx context.Context, role string, loggedInUserID primitive.ObjectID, req dto.CreateAccountRequest) (*models.Account, error) {
-	log.Println("AccountService CreateAccount() started")
+	log := requestctx.GetLogger(ctx).With(zap.String("logged_in_user_id", loggedInUserID.Hex()),
+		zap.String("role", role),
+	)
+	log.Info("creating account")
 
 	customerID, err := s.validateCreateAccountRequest(ctx, role, loggedInUserID, req)
 	if err != nil {
@@ -125,10 +142,14 @@ func (s *AccountService) CreateAccount(ctx context.Context, role string, loggedI
 	}
 
 	if req.InitialBalance < 0 {
+		log.Warn("invalid initial balance",
+			zap.Int64("initial_balance", req.InitialBalance),
+		)
 		return nil, constants.ErrInvalidInitialBalance
 	}
 	accountNumber, err := s.counterRepo.GetNextAccountNumber(ctx)
 	if err != nil {
+		log.Error("failed account number generation", zap.Error(err))
 		return nil, constants.ErrAccNumberGenerationFailed
 	}
 
@@ -152,56 +173,87 @@ func (s *AccountService) CreateAccount(ctx context.Context, role string, loggedI
 
 	err = s.accountRepo.CreateAccount(ctx, account)
 	if err != nil {
+		log.Error("failed to create account",
+			zap.String("account_number", accountNumber),
+			zap.Error(err),
+		)
 		return nil, err
 	}
 
 	// Cache redis ownership (non-blocking)
 	go func() {
-		_ = s.ownershipService.SaveAccountOwner(context.Background(), account.AccountNumber, customerID.Hex())
+		if err = s.ownershipService.SaveAccountOwner(context.Background(), account.AccountNumber, customerID.Hex()); err != nil {
+			log.Warn("failed to cache account ownership",
+				zap.Error(err),
+			)
+		}
 	}()
 
-	log.Println("AccountService CreateAccount() end")
+	log.Info("account created successfully", zap.String("account_number", account.AccountNumber))
 	return account, nil
 }
 
 func (s *AccountService) GetAccount(ctx context.Context, accountNumber, role string, userID primitive.ObjectID) (*models.Account, error) {
-	log.Println("AccountService GetAccount() started")
+	log := requestctx.GetLogger(ctx).With(zap.String("account_number", accountNumber),
+		zap.String("role", role),
+		zap.String("user_id", userID.Hex()),
+	)
+	log.Info("fetching account")
 
 	account, err := s.getAccountByNumber(ctx, accountNumber)
 	if err != nil {
-		log.Println("AccountService GetAccount() getAccountByNumber() error")
+		log.Error("failed to fetch account",
+			zap.Error(err),
+		)
 		return nil, err
 	}
 
 	if account.Status == constants.AccountStatusClosed {
+		log.Warn("account is already closed")
 		return nil, constants.ErrAccAlreadyClosed
 	}
 
 	err = s.ownershipService.EnforceAccountOwnership(ctx, accountNumber, role, userID)
 	if err != nil {
-		log.Println("AccountService EnforceAccountOwnership() error : ", err)
+		if errors.Is(err, constants.ErrUnauthorizedAccountAccess) {
+			log.Warn("unauthorized account access")
+		} else {
+			log.Error("failed to enforce ownership",
+				zap.Error(err),
+			)
+		}
 		return nil, err
 	}
 
-	log.Println("AccountService GetAccount() end")
 	return account, nil
 }
 
 func (s *AccountService) UpdateAccount(ctx context.Context, accountNumber string, role string, userID primitive.ObjectID, req dto.UpdateAccountRequest) (*models.Account, error) {
-	log.Println("AccountService UpdateAccount() started")
+	log := requestctx.GetLogger(ctx).With(zap.String("account_number", accountNumber))
+	log.Info("updating account")
 
 	account, err := s.getAccountByNumber(ctx, accountNumber)
 	if err != nil {
-		log.Println("account not found ", accountNumber)
+		log.Error("failed to fetch account",
+			zap.Error(err),
+		)
 		return nil, err
 	}
 
 	if account.Status != constants.AccountStatusPending {
+		log.Warn("invalid account status")
 		return nil, constants.ErrInvalidAccountStatus
 	}
 
 	err = s.ownershipService.EnforceAccountOwnership(ctx, accountNumber, role, userID)
 	if err != nil {
+		if errors.Is(err, constants.ErrUnauthorizedAccountAccess) {
+			log.Warn("unauthorized account access")
+		} else {
+			log.Error("failed to enforce ownership",
+				zap.Error(err),
+			)
+		}
 		return nil, err
 	}
 
@@ -221,34 +273,50 @@ func (s *AccountService) UpdateAccount(ctx context.Context, accountNumber string
 
 	account, err = s.accountRepo.UpdateAccount(ctx, accountNumber, updateFields)
 	if err != nil {
-		log.Println("AccountService UpdateAccount() err :=> ", err)
+		log.Error("failed to update account",
+			zap.Error(err),
+		)
 		return nil, err
 	}
 
-	log.Println("AccountService UpdateAccount() end")
+	log.Info("account updated successfully")
 	return account, nil
 }
 
 func (s *AccountService) DeleteAccount(ctx context.Context, accountNumber, role string, userID primitive.ObjectID) error {
-	log.Println("AccountService DeleteAccount() - soft delete started")
+	log := requestctx.GetLogger(ctx).With(zap.String("account_number", accountNumber))
+	log.Info("deleting account")
 
 	account, err := s.getAccountByNumber(ctx, accountNumber)
 	if err != nil {
-		log.Println("invalid account number ", accountNumber)
+		log.Error("failed to fetch account",
+			zap.Error(err),
+		)
 		return constants.ErrAccNotFound
 	}
 
 	if account.Status == constants.AccountStatusClosed {
+		log.Error("account is already closed")
 		return constants.ErrAccAlreadyClosed
 	}
 
 	if err := s.ownershipService.EnforceAccountOwnership(ctx, accountNumber, role, userID); err != nil {
+		if errors.Is(err, constants.ErrUnauthorizedAccountAccess) {
+			log.Warn("unauthorized account access")
+		} else {
+			log.Error("failed to enforce ownership",
+				zap.Error(err),
+			)
+		}
 		return err
 	}
 
 	/*err = s.accountRepo.DeleteByAccountNumber(ctx, accountNumber)
 	if err != nil {
-		log.Println("invalid account number ", accountNumber)
+		log.Error("invalid account number ",
+			zap.String("account_number", accountNumber),
+			zap.Error(err),
+		)
 		if err == constants.ErrAccNotFoundORUnauthorized {
 			return err
 		}
@@ -266,11 +334,13 @@ func (s *AccountService) DeleteAccount(ctx context.Context, accountNumber, role 
 	}
 	_, err = s.accountRepo.UpdateAccount(ctx, accountNumber, update)
 	if err != nil {
-		log.Println("AccountService DeleteAccount() - soft delete failed", err)
+		log.Error("failed to delete account",
+			zap.Error(err),
+		)
 		return constants.ErrAccDeletionFailed
 	}
 
-	log.Println("AccountService DeleteAccount() - soft delete end")
+	log.Info("account deleted successfully")
 	return nil
 }
 

@@ -3,9 +3,10 @@ package middlewares
 import (
 	"banking-system-backend/internal/requestctx"
 	"banking-system-backend/pkg/logger"
+	"time"
+
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
-	"time"
 )
 
 func LoggerMiddleware() gin.HandlerFunc {

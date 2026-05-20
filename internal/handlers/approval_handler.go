@@ -3,12 +3,14 @@ package handlers
 import (
 	"banking-system-backend/constants"
 	approveInterfaces "banking-system-backend/internal/approval/interfaces"
+	"banking-system-backend/internal/requestctx"
 	"banking-system-backend/pkg/utils"
-	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"log"
 	"net/http"
 	"strings"
+
+	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.uber.org/zap"
 )
 
 type ApprovalHandler struct {
@@ -20,56 +22,85 @@ func NewApprovalHandler(approvalService approveInterfaces.ApprovalServiceInterfa
 }
 
 func (h *ApprovalHandler) ListRequests(c *gin.Context) {
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("list approval requests received")
+
 	entity := c.Query("entity") // optional filter
 	status := c.Query("status")
 
 	requests, err := h.approvalService.List(c.Request.Context(), entity, status)
 	if err != nil {
+		log.Error("failed to list approval requests", zap.Error(err))
 		utils.Error500(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, requests)
+	log.Info("approval requests listed successfully", zap.Int("count", len(requests)))
+	utils.Success(c, http.StatusOK, requests)
 }
 
 func (h *ApprovalHandler) GetRequest(c *gin.Context) {
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("get approval request received")
+
 	requestIDHex := strings.TrimSpace(c.Param("requestID"))
 
 	requestID, err := primitive.ObjectIDFromHex(requestIDHex)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid requestID"})
+		log.Warn("invalid request ID",
+			zap.String("request_id", requestIDHex),
+			zap.Error(err),
+		)
+		utils.Error400(c, constants.ErrInvalidRequestID)
 		return
 	}
 
 	req, err := h.approvalService.GetRequestByID(c.Request.Context(), requestID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		log.Warn("approval request not found",
+			zap.String("request_id", requestID.Hex()),
+			zap.Error(err),
+		)
+		utils.Error404(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, req)
+	log.Info("approval request retrieved successfully",
+		zap.String("request_id", req.ID.Hex()),
+	)
+	utils.Success(c, http.StatusOK, req)
 }
 
 func (h *ApprovalHandler) Approve(c *gin.Context) {
-	log.Println("ApprovalHandler Approve() started")
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("ApprovalHandler Approve() started")
 
 	requestIDHex := strings.TrimSpace(c.Param("requestID"))
 	if requestIDHex == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Request ID is required"})
+		log.Warn("request ID is required")
+		utils.Error400(c, constants.ErrRequestIDRequired)
 		return
 	}
 
 	requestID, err := primitive.ObjectIDFromHex(requestIDHex)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request ID"})
+		log.Warn("invalid request ID",
+			zap.String("request_id", requestIDHex),
+			zap.Error(err),
+		)
+		utils.Error400(c, constants.ErrInvalidRequestID)
 		return
 	}
 
-	log.Printf("ApprovalHandler Approve requestID=%s", requestIDHex)
+	log.Info("ApprovalHandler Approve requestID=%s", zap.String("request_id", requestIDHex))
 
 	checkerID := c.MustGet("userID").(primitive.ObjectID)
 	if checkerID == primitive.NilObjectID {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid checker ID"})
+		log.Warn("invalid checker ID")
+		utils.Error400(c, constants.ErrInvalidCheckerID)
 		return
 	}
 
@@ -90,26 +121,45 @@ func (h *ApprovalHandler) Approve(c *gin.Context) {
 		switch {
 
 		case err == constants.ErrMakerCheckerRequestNotFound:
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			log.Warn("approval request not found",
+				zap.String("request_id", requestID.Hex()),
+				zap.Error(err),
+			)
+			utils.Error404(c, err)
 
 		case err == constants.ErrInvalidMakerCheckerStatus:
-			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			log.Warn("invalid approval request status",
+				zap.String("request_id", requestID.Hex()),
+				zap.Error(err),
+			)
+			utils.Error409(c, err)
 
 		case err == constants.ErrMakerCheckerViolation:
-			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			log.Warn("approval request violation",
+				zap.String("request_id", requestID.Hex()),
+				zap.Error(err),
+			)
+			utils.Error403(c, err)
 
 		case err == constants.ErrInvalidAction:
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			log.Warn("invalid action",
+				zap.String("request_id", requestID.Hex()),
+				zap.Error(err),
+			)
+			utils.Error400(c, err)
 
 		default:
-			//utils.Error500(c, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			log.Error("unexpected error",
+				zap.String("request_id", requestID.Hex()),
+				zap.Error(err),
+			)
+			utils.Error500(c, err)
 		}
 		return
 	}
 
-	log.Println("ApprovalHandler Approve() end")
-	c.JSON(http.StatusOK, gin.H{"message": "Request approved successfully"})
+	log.Info("Request approved successfully", zap.String("request_id", requestID.Hex()))
+	utils.SuccessMessage(c, http.StatusOK, "Request approved successfully")
 }
 
 type RejectRequest struct {
@@ -117,23 +167,31 @@ type RejectRequest struct {
 }
 
 func (h *ApprovalHandler) Reject(c *gin.Context) {
-	log.Println("ApprovalHandler Reject() started")
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("ApprovalHandler Reject() started")
 
 	requestIDHex := strings.TrimSpace(c.Param("requestID"))
 	if requestIDHex == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Request ID is required"})
+		log.Warn("request ID is required")
+		utils.Error400(c, constants.ErrRequestIDRequired)
 		return
 	}
 
 	requestID, err := primitive.ObjectIDFromHex(requestIDHex)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request ID"})
+		log.Warn("invalid request ID",
+			zap.String("request_id", requestIDHex),
+			zap.Error(err),
+		)
+		utils.Error400(c, constants.ErrInvalidRequestID)
 		return
 	}
 
 	checkerID := c.MustGet("userID").(primitive.ObjectID)
 	if checkerID == primitive.NilObjectID {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid checker ID"})
+		log.Warn("invalid checker ID")
+		utils.Error400(c, constants.ErrInvalidCheckerID)
 		return
 	}
 
@@ -142,7 +200,8 @@ func (h *ApprovalHandler) Reject(c *gin.Context) {
 
 	var req RejectRequest
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Reason) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": constants.ErrRejectReasonRequired.Error()})
+		log.Warn("reject reason is required")
+		utils.Error400(c, constants.ErrRejectReasonRequired)
 		return
 	}
 
@@ -160,26 +219,50 @@ func (h *ApprovalHandler) Reject(c *gin.Context) {
 		switch {
 
 		case err == constants.ErrMakerCheckerRequestNotFound:
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			log.Warn("approval request not found",
+				zap.String("request_id", requestID.Hex()),
+				zap.Error(err),
+			)
+			utils.Error404(c, err)
 
 		case err == constants.ErrInvalidMakerCheckerStatus:
-			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			log.Warn("invalid approval request status",
+				zap.String("request_id", requestID.Hex()),
+				zap.Error(err),
+			)
+			utils.Error409(c, err)
 
 		case err == constants.ErrMakerCheckerViolation:
-			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			log.Warn("approval request violation",
+				zap.String("request_id", requestID.Hex()),
+				zap.Error(err),
+			)
+			utils.Error403(c, err)
 
 		case err == constants.ErrInvalidAction:
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			log.Warn("invalid action",
+				zap.String("request_id", requestID.Hex()),
+				zap.Error(err),
+			)
+			utils.Error400(c, err)
 
 		case err == constants.ErrRejectReasonRequired:
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			log.Warn("reject reason is required",
+				zap.String("request_id", requestID.Hex()),
+				zap.Error(err),
+			)
+			utils.Error400(c, err)
 
 		default:
+			log.Error("unexpected error",
+				zap.String("request_id", requestID.Hex()),
+				zap.Error(err),
+			)
 			utils.Error500(c, err)
 		}
 		return
 	}
 
-	log.Println("ApprovalHandler Reject() end")
-	c.JSON(http.StatusOK, gin.H{"message": "Request rejected successfully"})
+	log.Info("Request rejected successfully", zap.String("request_id", requestID.Hex()))
+	utils.SuccessMessage(c, http.StatusOK, "Request rejected successfully")
 }

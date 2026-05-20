@@ -1,16 +1,17 @@
 package logger
 
 import (
+	"log"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"log"
 )
 
 var Log *zap.Logger
-var err error
-var logConfig zap.Config
 
 func InitLogger(env string, appName string) {
+	var logConfig zap.Config
+
 	switch env {
 	case "production":
 		logConfig = zap.NewProductionConfig()
@@ -39,10 +40,15 @@ func InitLogger(env string, appName string) {
 		"env": env,
 	}
 
-	Log, err = logConfig.Build()
+	Log, err := logConfig.Build(
+		zap.AddCaller(),
+		zap.AddStacktrace(zap.ErrorLevel),
+	)
 	if err != nil {
 		panic("Failed to initialize logger: " + err.Error())
 	}
+
+	zap.ReplaceGlobals(Log)
 }
 
 func Sync() {

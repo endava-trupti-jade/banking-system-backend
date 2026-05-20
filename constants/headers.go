@@ -5,4 +5,5 @@ const (
 	ContentTypeJSON   = "application/json"
 	HeaderAuth        = "Authorization"
 	HeaderContentType = "Content-Type"
+	AuthContextKey    = "auth_ctx"
 )

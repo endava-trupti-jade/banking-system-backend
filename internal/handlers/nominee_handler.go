@@ -3,13 +3,15 @@ package handlers
 import (
 	"banking-system-backend/constants"
 	"banking-system-backend/internal/dto"
+	"banking-system-backend/internal/requestctx"
 	serviceInterfaces "banking-system-backend/internal/services/interfaces"
 	"banking-system-backend/pkg/utils"
-	"log"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.uber.org/zap"
 )
 
 type NomineeHandler struct {
@@ -31,29 +33,35 @@ func NewNomineeHandler(service serviceInterfaces.NomineeServiceInterface) *Nomin
 // @Failure 400 {object} map[string]string
 // @Router /api/nominees [POST]
 func (h *NomineeHandler) CreateNominee(c *gin.Context) {
-	log.Println("NomineeHandler CreateNominee() started")
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("create nominee request received")
 
 	var req dto.NomineeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Warn("failed to bind create nominee request",
+			zap.Error(err),
+		)
+		utils.Error400(c, err)
 		return
 	}
 
-	userID := c.MustGet("userID").(primitive.ObjectID)
-	if userID == primitive.NilObjectID {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": constants.ErrUnauthorized.Error()})
-		return
-	}
+	authCtx := requestctx.MustGetAuth(c)
 
-	nominee, err := h.nomineeService.CreateNominee(c.Request.Context(), userID, req)
+	nominee, err := h.nomineeService.CreateNominee(ctx, authCtx.UserID, req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		log.Warn("failed to create nominee",
+			zap.Error(err),
+		)
+		utils.HandleServiceError(c, err)
 		return
 	}
 
-	log.Println("NomineeHandler CreateNominee() end")
+	log.Info("nominee created successfully",
+		zap.String("nominee_id", nominee.ID.Hex()),
+	)
 
-	c.JSON(http.StatusCreated, gin.H{"message": constants.MsgNomineeCreated, "id": nominee.ID})
+	utils.SuccessMessage(c, http.StatusCreated, constants.MsgNomineeCreated)
 }
 
 // UpdateNominee godoc
@@ -67,50 +75,66 @@ func (h *NomineeHandler) CreateNominee(c *gin.Context) {
 // @Failure 400 {object} map[string]string
 // @Router /api/nominees/{nomineeId} [PUT]
 func (h *NomineeHandler) UpdateNominee(c *gin.Context) {
-	log.Println("NomineeHandler UpdateNominee() started")
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("update nominee request received")
 
 	var req dto.NomineeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		log.Warn("failed to bind update nominee request",
+			zap.Error(err),
+		)
+		utils.Error400(c, err)
 		return
 	}
 
 	nomineeIDHex := c.Param("nomineeId")
 	if nomineeIDHex == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Nominee ID is required"})
+		log.Warn("nominee ID is required")
+		utils.Error400(c, constants.ErrNomineeIDRequired)
 		return
 	}
 
 	nomineeId, err := primitive.ObjectIDFromHex(nomineeIDHex)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Nominee ID"})
+		log.Warn("invalid nominee ID",
+			zap.String("nominee_id", nomineeIDHex),
+			zap.Error(err),
+		)
+		utils.Error400(c, constants.ErrInvalidNomineeID)
 		return
 	}
 
-	userID := c.MustGet("userID").(primitive.ObjectID)
-	if userID == primitive.NilObjectID {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": constants.ErrUnauthorized.Error()})
-		return
-	}
+	authCtx := requestctx.MustGetAuth(c)
 
-	nominee, err := h.nomineeService.UpdateNominee(c.Request.Context(), nomineeId, userID, req)
+	nominee, err := h.nomineeService.UpdateNominee(ctx, nomineeId, authCtx.UserID, req)
 	if err != nil {
-		if err == constants.ErrNomineeNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if errors.Is(err, constants.ErrNomineeNotFound) {
+			log.Warn("nominee not found",
+				zap.String("nominee_id", nomineeId.Hex()),
+			)
+			utils.Error404(c, err)
 			return
 		}
 
-		if err == constants.ErrUnauthorized {
-			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		if errors.Is(err, constants.ErrUnauthorized) {
+			log.Warn("unauthorized request")
+			utils.Error403(c, err)
 			return
 		}
 
+		log.Warn("failed to update nominee",
+			zap.String("nominee_id", nomineeId.Hex()),
+			zap.Error(err),
+		)
 		utils.Error500(c, err)
 		return
 	}
 
-	log.Println("NomineeHandler UpdateNominee() end")
-	c.JSON(http.StatusOK, nominee)
+	log.Info("nominee updated successfully",
+		zap.String("nominee_id", nominee.ID.Hex()),
+	)
+	utils.Success(c, http.StatusOK, nominee)
 }
 
 // DeleteNominee godoc
@@ -123,47 +147,65 @@ func (h *NomineeHandler) UpdateNominee(c *gin.Context) {
 // @Failure 404 {object} map[string]string
 // @Router /api/nominees/{nomineeId} [DELETE]
 func (h *NomineeHandler) DeleteNominee(c *gin.Context) {
-	log.Println("NomineeHandler DeleteNominee() started")
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("delete nominee request received")
+
 	nomineeIDHex := c.Param("nomineeId")
 	if nomineeIDHex == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Nominee ID is required"})
+		log.Warn("nominee ID is required")
+		utils.Error400(c, constants.ErrNomineeIDRequired)
 		return
 	}
 
-	nomineeID, err := primitive.ObjectIDFromHex(nomineeIDHex)
+	nomineeID, err := utils.ParseObjectID(nomineeIDHex, "nominee ID")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Nominee ID"})
+		log.Warn("invalid nominee ID",
+			zap.String("nominee_id", nomineeIDHex),
+			zap.Error(err),
+		)
+		utils.Error400(c, constants.ErrInvalidNomineeID)
 		return
 	}
 
-	userID := c.MustGet("userID").(primitive.ObjectID)
-	if userID == primitive.NilObjectID {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": constants.ErrUnauthorized.Error()})
-		return
-	}
+	authCtx := requestctx.MustGetAuth(c)
 
-	if err := h.nomineeService.SoftDeleteNominee(c.Request.Context(), nomineeID, userID); err != nil {
-		if err == constants.ErrNomineeNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	if err := h.nomineeService.SoftDeleteNominee(ctx, nomineeID, authCtx.UserID); err != nil {
+		if errors.Is(err, constants.ErrNomineeNotFound) {
+			log.Warn("nominee not found",
+				zap.String("nominee_id", nomineeID.Hex()),
+			)
+			utils.Error404(c, err)
 			return
 		}
 
-		if err == constants.ErrUnauthorized {
-			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		if errors.Is(err, constants.ErrUnauthorized) {
+			log.Warn("unauthorized request")
+			utils.Error403(c, err)
 			return
 		}
 
-		if err == constants.ErrNomineeAlreadyMappedToAccount {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if errors.Is(err, constants.ErrNomineeAlreadyMappedToAccount) {
+			log.Warn("cannot delete nominee mapped to account",
+				zap.String("nominee_id", nomineeID.Hex()),
+				zap.Error(err),
+			)
+			utils.Error409(c, err)
 			return
 		}
 
+		log.Warn("failed to delete nominee",
+			zap.String("nominee_id", nomineeID.Hex()),
+			zap.Error(err),
+		)
 		utils.Error500(c, err)
 		return
 	}
 
-	log.Println("NomineeHandler DeleteNominee() end")
-	c.JSON(http.StatusOK, gin.H{"message": constants.MsgNomineeDeleted})
+	log.Info("nominee deleted successfully",
+		zap.String("nominee_id", nomineeID.Hex()),
+	)
+	utils.SuccessMessage(c, http.StatusOK, constants.MsgNomineeDeleted)
 }
 
 // GetNominee godoc
@@ -177,58 +219,71 @@ func (h *NomineeHandler) DeleteNominee(c *gin.Context) {
 // @Failure 500 {object} map[string]string
 // @Router /api/nominees/{nomineeId} [GET]
 func (h *NomineeHandler) GetNominee(c *gin.Context) {
-	log.Println("NomineeHandler GetNominee() started")
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("get nominee request received")
 
 	nomineeIDHex := c.Param("nomineeId")
 	if nomineeIDHex == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Nominee ID is required"})
+		log.Warn("nominee ID is required")
+		utils.Error400(c, constants.ErrNomineeIDRequired)
 		return
 	}
 
-	nomineeID, err := primitive.ObjectIDFromHex(nomineeIDHex)
+	nomineeID, err := utils.ParseObjectID(nomineeIDHex, "nominee ID")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Nominee ID"})
+		log.Warn("invalid nominee ID",
+			zap.String("nominee_id", nomineeIDHex),
+			zap.Error(err),
+		)
+		utils.Error400(c, constants.ErrInvalidNomineeID)
 		return
 	}
 
-	userID := c.MustGet("userID").(primitive.ObjectID)
-	if userID == primitive.NilObjectID {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": constants.ErrUnauthorized.Error()})
-		return
-	}
+	authCtx := requestctx.MustGetAuth(c)
 
-	nominee, err := h.nomineeService.GetNomineeByID(c.Request.Context(), nomineeID, userID)
+	nominee, err := h.nomineeService.GetNomineeByID(ctx, nomineeID, authCtx.UserID)
 	if err != nil {
-		if err == constants.ErrNomineeNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if errors.Is(err, constants.ErrNomineeNotFound) {
+			log.Warn("nominee not found",
+				zap.String("nominee_id", nomineeID.Hex()),
+			)
+			utils.HandleServiceError(c, err)
 			return
 		}
-		if err == constants.ErrUnauthorized {
-			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
-			return
-		}
-		utils.Error500(c, err)
+
+		log.Warn("failed to get nominee",
+			zap.String("nominee_id", nomineeID.Hex()),
+			zap.Error(err),
+		)
+		utils.HandleServiceError(c, err)
 		return
 	}
 
-	log.Println("NomineeHandler GetNominee() end")
-	c.JSON(http.StatusOK, nominee)
+	log.Info("nominee retrieved successfully",
+		zap.String("nominee_id", nominee.ID.Hex()),
+	)
+	utils.Success(c, http.StatusOK, nominee)
 
 }
 
 func (h *NomineeHandler) ListNominees(c *gin.Context) {
+	ctx := c.Request.Context()
+	log := requestctx.GetLogger(ctx)
+	log.Info("list nominees request received")
 
-	userID := c.MustGet("userID").(primitive.ObjectID)
-	if userID == primitive.NilObjectID {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
-		return
-	}
+	authCtx := requestctx.MustGetAuth(c)
 
-	nominees, err := h.nomineeService.ListNominees(c.Request.Context(), userID)
+	nominees, err := h.nomineeService.ListNominees(ctx, authCtx.UserID)
 	if err != nil {
-		utils.Error500(c, err)
+		log.Warn("failed to list nominees",
+			zap.Error(err),
+		)
+		utils.HandleServiceError(c, err)
 		return
 	}
-
-	c.JSON(http.StatusOK, nominees)
+	log.Info("nominees listed successfully",
+		zap.Int("count", len(nominees)),
+	)
+	utils.Success(c, http.StatusOK, nominees)
 }

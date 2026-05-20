@@ -8,12 +8,13 @@ import (
 	"banking-system-backend/internal/models"
 	"banking-system-backend/internal/repositories/interfaces"
 	"banking-system-backend/internal/repositories/mongorepo"
+	"banking-system-backend/internal/requestctx"
 	"banking-system-backend/internal/validators"
 	"context"
-	"log"
 	"sync"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.uber.org/zap"
 )
 
 type AccountNomineeService struct {
@@ -45,6 +46,12 @@ func (s *AccountNomineeService) getAccountLock(accountNumber string) *sync.Mutex
 }
 
 func (s *AccountNomineeService) validateAccountAccess(ctx context.Context, userID primitive.ObjectID, role string, accountNumber string) (*models.Account, error) {
+	log := requestctx.GetLogger(ctx).With(
+
+		zap.String("account_number", accountNumber),
+		zap.String("user_id", userID.Hex()),
+		zap.String("role", role),
+	)
 
 	account, err := s.accountRepo.FindByAccountNumber(ctx, accountNumber)
 	if err != nil {
@@ -57,6 +64,7 @@ func (s *AccountNomineeService) validateAccountAccess(ctx context.Context, userI
 	}
 
 	if role == constants.RoleCustomer && account.CustomerID != customer.ID {
+		log.Warn("unauthorized account access")
 		return nil, constants.ErrUnauthorizedAccountAccess
 	}
 
@@ -64,7 +72,12 @@ func (s *AccountNomineeService) validateAccountAccess(ctx context.Context, userI
 }
 
 func (s *AccountNomineeService) AddAccountNominee(ctx context.Context, userID primitive.ObjectID, role, accountNumber string, req dto.AccountNomineeRequest) (primitive.ObjectID, error) {
-	log.Println("AccountNomineeService AddAccountNominee() started")
+	log := requestctx.GetLogger(ctx).With(
+		zap.String("account_number", accountNumber),
+		zap.String("user_id", userID.Hex()),
+		zap.String("role", role),
+	)
+	log.Info("adding account nominee")
 
 	accountLock := s.getAccountLock(accountNumber)
 	accountLock.Lock()
@@ -72,17 +85,21 @@ func (s *AccountNomineeService) AddAccountNominee(ctx context.Context, userID pr
 
 	account, err := s.validateAccountAccess(ctx, userID, role, accountNumber)
 	if err != nil {
+		log.Warn("account access validation failed", zap.Error(err))
 		return primitive.NilObjectID, err
 	}
 
 	customer, err := s.customerRepo.GetByUserID(ctx, userID)
 	if err != nil {
+		log.Warn("failed to get customer", zap.Error(err))
 		return primitive.NilObjectID, err
 	}
 
 	nominee, err := s.validator.ValidateCreate(ctx, customer.ID, account.ID, req)
 	if err != nil {
-		log.Println("ac nominee service - ", nominee, err)
+		log.Warn("failed to validate nominee creation",
+			zap.Error(err),
+		)
 		return primitive.NilObjectID, err
 	}
 
@@ -108,7 +125,9 @@ func (s *AccountNomineeService) AddAccountNominee(ctx context.Context, userID pr
 		return primitive.NilObjectID, err
 	}
 
-	log.Println("AccountNomineeService AddAccountNominee() end")
+	log.Info("account nominee added successfully",
+		zap.String("request_id", requestID.Hex()),
+	)
 	return requestID, nil
 }
 
@@ -119,21 +138,35 @@ func (s *AccountNomineeService) UpdateAccountNominee(
 	mappingID primitive.ObjectID,
 	req dto.AccountNomineeRequest,
 ) (primitive.ObjectID, error) {
+	log := requestctx.GetLogger(ctx).With(
+		zap.String("account_number", accountNumber),
+		zap.String("user_id", userID.Hex()),
+		zap.String("role", role),
+		zap.String("mapping_id", mappingID.Hex()),
+	)
+	log.Info("updating account nominee")
 	accountLock := s.getAccountLock(accountNumber)
 	accountLock.Lock()
 	defer accountLock.Unlock()
 
 	account, err := s.validateAccountAccess(ctx, userID, role, accountNumber)
 	if err != nil {
+		log.Warn("account access validation failed",
+			zap.Error(err),
+		)
 		return primitive.NilObjectID, err
 	}
 
 	// Validate mapping belongs to account
 	mapping, err := s.accountNomineeRepo.GetByID(ctx, mappingID)
 	if err != nil {
+		log.Warn("nominee mapping not found",
+			zap.Error(err),
+		)
 		return primitive.NilObjectID, constants.ErrNomineeMappingNotFound
 	}
 	if mapping.AccountID != account.ID {
+		log.Warn("unauthorized account nominee access")
 		return primitive.NilObjectID, constants.ErrUnauthorizedAccountAccess
 	}
 
@@ -166,7 +199,9 @@ func (s *AccountNomineeService) UpdateAccountNominee(
 		return primitive.NilObjectID, err
 	}
 
-	log.Println("AccountNomineeService UpdateAccountNominee() end")
+	log.Info("account nominee updated successfully",
+		zap.String("request_id", requestID.Hex()),
+	)
 	return requestID, nil
 }
 
@@ -177,13 +212,22 @@ func (s *AccountNomineeService) SoftDeleteAccountNominee(
 	accountNumber string,
 	mappingID primitive.ObjectID,
 ) (primitive.ObjectID, error) {
-	log.Println("AccountNomineeService SoftDeleteAccountNominee() started")
+	log := requestctx.GetLogger(ctx).With(
+		zap.String("account_number", accountNumber),
+		zap.String("user_id", userID.Hex()),
+		zap.String("role", role),
+		zap.String("mapping_id", mappingID.Hex()),
+	)
+
+	log.Info("soft deleting account nominee")
+
 	accountLock := s.getAccountLock(accountNumber)
 	accountLock.Lock()
 	defer accountLock.Unlock()
 
 	account, err := s.validateAccountAccess(ctx, userID, role, accountNumber)
 	if err != nil {
+		log.Warn("account access validation failed", zap.Error(err))
 		return primitive.NilObjectID, err
 	}
 
@@ -212,12 +256,19 @@ func (s *AccountNomineeService) SoftDeleteAccountNominee(
 		return primitive.NilObjectID, err
 	}
 
-	log.Println("AccountNomineeService SoftDeleteAccountNominee() end")
+	log.Info("account nominee soft deleted successfully",
+		zap.String("request_id", requestID.Hex()),
+	)
 
 	return requestID, nil
 }
 
 func (s *AccountNomineeService) ListAccountNomineesByAccountNumber(ctx context.Context, accountNumber string) ([]dto.AccountNomineeResponse, error) {
+	log := requestctx.GetLogger(ctx).With(
+		zap.String("account_number", accountNumber),
+	)
+	log.Info("listing account nominees")
+
 	account, err := s.accountRepo.FindByAccountNumber(ctx, accountNumber)
 	if err != nil {
 		return nil, constants.ErrAccNotFound
@@ -225,8 +276,15 @@ func (s *AccountNomineeService) ListAccountNomineesByAccountNumber(ctx context.C
 
 	existingMappings, err := s.accountNomineeRepo.GetNomineesWithDetails(ctx, account.ID)
 	if err != nil {
+		log.Error("failed to list account nominees",
+			zap.Error(err),
+		)
 		return nil, err
 	}
+
+	log.Info("account nominees listed successfully",
+		zap.Int("num_nominees", len(existingMappings)),
+	)
 
 	return existingMappings, nil
 }

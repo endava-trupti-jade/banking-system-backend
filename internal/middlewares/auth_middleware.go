@@ -4,20 +4,18 @@ import (
 	"banking-system-backend/constants"
 	"banking-system-backend/internal/requestctx"
 	"banking-system-backend/pkg/utils"
+	"net/http"
+	"strings"
+
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
-	"net/http"
-	"strings"
 )
 
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
-		log := requestctx.GetLogger(ctx).With(
-			zap.String("path", c.FullPath()),
-			zap.String("method", c.Request.Method),
-		)
+		log := requestctx.GetLogger(ctx)
 
 		authHeader := c.GetHeader(constants.HeaderAuth)
 		if authHeader == "" {
@@ -56,18 +54,34 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		// enrich logger
+		log = log.With(
+			zap.String("user_id", userID.Hex()),
+			zap.String("role", role),
+		)
+
 		// inject into centralized request context
 		ctx = requestctx.WithUserID(ctx, userID)
 		ctx = requestctx.WithRole(ctx, role)
+
+		// IMPORTANT: inject enriched logger back
+		ctx = requestctx.WithLogger(ctx, log)
+
+		// update request context
 		c.Request = c.Request.WithContext(ctx)
 
-		c.Set("userID", userID)
-		c.Set("role", role)
-
 		log.Info("User authenticated", zap.String("userID", userIDHex), zap.String("role", role))
+
+		authCtx := &requestctx.AuthContext{
+			UserID: userID,
+			Role:   role,
+		}
+
+		// store in gin context
+		c.Set(constants.AuthContextKey, authCtx)
+
+		// c.Set("userID", userID)
+		// c.Set("role", role)
 		c.Next()
 	}
 }
-
-/*Middleware should NEVER do raw context.WithValue.
-This breaks the single-source-of-truth pattern.*/
