@@ -7,6 +7,7 @@ import (
 	"banking-system-backend/internal/config"
 	"banking-system-backend/internal/executors"
 	"banking-system-backend/internal/handlers"
+	"banking-system-backend/internal/kafka/producer"
 	"banking-system-backend/internal/middlewares"
 	"banking-system-backend/internal/repositories/mongorepo"
 	"banking-system-backend/internal/repositories/redisrepo"
@@ -38,16 +39,20 @@ func SetupRoutes(r *gin.Engine) {
 	accountNomineeValidator := validators.NewAccountNomineeValidator(accountNomineeRepo, nomineeRepo)
 	accountBeneficiaryValidator := validators.NewAccountBeneficiaryValidator(accountBeneficiaryRepo, beneficiaryRepo)
 
+	nomineeProducer := producer.NewNomineeProducer()
 	accountNomineeExecutor := executors.NewAccountNomineeExecutor(
 		accountNomineeRepo,
 		accountRepo,
 		nomineeRepo,
 		accountNomineeValidator,
+		nomineeProducer,
 	)
 
+	beneficiaryProducer := producer.NewBeneficiaryProducer()
 	accountBeneficiaryExecutor := executors.NewAccountBeneficiaryExecutor(
 		accountRepo,
 		accountBeneficiaryRepo,
+		beneficiaryProducer,
 	)
 	executorsMP := map[string]approvalServicePkg.Executor{
 		"ACCOUNT_NOMINEE:CREATE":     accountNomineeExecutor,

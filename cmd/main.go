@@ -3,13 +3,16 @@ package main
 import (
 	_ "banking-system-backend/docs"
 	"banking-system-backend/internal/config"
+	"banking-system-backend/internal/kafka/consumer"
 	"banking-system-backend/internal/middlewares"
 	"banking-system-backend/internal/routes"
 	"banking-system-backend/pkg/logger"
+	"context"
+	"log"
+
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
-	"log"
 )
 
 // @title Banking System API
@@ -62,6 +65,12 @@ func main() {
 	routes.SetupRoutes(router)
 
 	logger.Log.Info("application_started")
+
+	beneficiaryConsumer := consumer.NewBeneficiaryConsumer()
+	go beneficiaryConsumer.Start(context.Background())
+
+	nomineeConsumer := consumer.NewNomineeConsumer()
+	go nomineeConsumer.Start(context.Background())
 
 	router.Run(":" + config.AppConfig.AppPort)
 }

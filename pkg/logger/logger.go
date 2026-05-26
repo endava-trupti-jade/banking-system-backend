@@ -11,6 +11,7 @@ var Log *zap.Logger
 
 func InitLogger(env string, appName string) {
 	var logConfig zap.Config
+	var err error
 
 	switch env {
 	case "production":
@@ -40,7 +41,7 @@ func InitLogger(env string, appName string) {
 		"env": env,
 	}
 
-	Log, err := logConfig.Build(
+	Log, err = logConfig.Build(
 		zap.AddCaller(),
 		zap.AddStacktrace(zap.ErrorLevel),
 	)

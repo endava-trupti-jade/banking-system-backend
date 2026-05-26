@@ -21,6 +21,7 @@ var RolePolicies = map[string][]string{
 		constants.PolicyNomineeApproval,
 	},
 	constants.RoleCustomer: {
+		constants.PolicyBeneficiaryFullAccess,
 		constants.PolicyAccountBeneficiaryFullAccess,
 		constants.PolicyAccountNomineeFullAccess,
 		constants.PolicyAccountReadOnly,

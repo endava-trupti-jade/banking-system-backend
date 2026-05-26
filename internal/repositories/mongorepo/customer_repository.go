@@ -4,10 +4,11 @@ import (
 	"banking-system-backend/constants"
 	"banking-system-backend/internal/models"
 	"context"
+	"log"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
-	"log"
 )
 
 type CustomerRepository struct {
@@ -30,6 +31,7 @@ func (r *CustomerRepository) GetByUserID(
 
 	var customer models.Customer
 
+	log.Println("CustomerRepository userID : ", userID)
 	err := r.Collection.FindOne(ctx, bson.M{
 		"user_id": userID,
 	}).Decode(&customer)
