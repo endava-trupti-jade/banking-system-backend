@@ -4,14 +4,20 @@ import (
 	"banking-system-backend/constants"
 	approvalModel "banking-system-backend/internal/approval/model"
 	"banking-system-backend/internal/dto"
+	"banking-system-backend/internal/kafka/events"
+	"banking-system-backend/internal/kafka/producer"
 	"banking-system-backend/internal/models"
 	"banking-system-backend/internal/repositories/mongorepo"
 	"banking-system-backend/internal/validators"
+	"banking-system-backend/pkg/logger"
 	"context"
 	"encoding/json"
-	"go.mongodb.org/mongo-driver/bson"
 	"log"
 	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.uber.org/zap"
 )
 
 type AccountNomineeExecutor struct {
@@ -19,6 +25,7 @@ type AccountNomineeExecutor struct {
 	accountRepo        *mongorepo.AccountRepository
 	nomineeRepo        *mongorepo.NomineeRepository
 	validator          *validators.AccountNomineeValidator
+	nomineeProducer    *producer.NomineeProducer
 }
 
 func NewAccountNomineeExecutor(
@@ -26,12 +33,14 @@ func NewAccountNomineeExecutor(
 	accountRepo *mongorepo.AccountRepository,
 	nomineeRepo *mongorepo.NomineeRepository,
 	accountNomineeValidator *validators.AccountNomineeValidator,
+	nomineeProducer *producer.NomineeProducer,
 ) *AccountNomineeExecutor {
 	return &AccountNomineeExecutor{
 		accountNomineeRepo: accountNomineeRepo,
 		accountRepo:        accountRepo,
 		nomineeRepo:        nomineeRepo,
 		validator:          accountNomineeValidator,
+		nomineeProducer:    nomineeProducer,
 	}
 }
 
@@ -94,7 +103,48 @@ func (e *AccountNomineeExecutor) handleCreate(ctx context.Context, rawPayload []
 	}
 
 	_, err = e.accountNomineeRepo.Create(ctx, mapping)
-	return err
+	if err != nil {
+		return err
+	}
+
+	event := events.NomineeCreatedEvent{
+		AccountID:         account.ID.Hex(),
+		NomineeID:         cmd.NomineeID.Hex(),
+		Relation:          cmd.Relation,
+		IsPrimary:         cmd.IsPrimary,
+		NomineePercentage: cmd.NomineePercentage,
+		CommonEvent: events.CommonEvent{
+			EventID:    primitive.NewObjectID().Hex(),
+			EventType:  constants.EventNomineeCreated,
+			CreatedBy:  cmd.CreatedBy.Hex(),
+			OccurredAt: time.Now(),
+		},
+	}
+
+	logger.Log.Info("before starting nominee kafka goroutine")
+	go func() {
+		logger.Log.Info("inside nominee publish goroutine")
+
+		defer func() {
+			if r := recover(); err != nil {
+				logger.Log.Error("panic in nominee kafka goroutine", zap.Any("recover", r))
+			}
+		}()
+
+		logger.Log.Info("starting nominee kafka publish goroutine")
+
+		kafkaCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err = e.nomineeProducer.Publish(kafkaCtx, event)
+		if err != nil {
+			logger.Log.Error("failed to publish nominee created event", zap.Error(err))
+		}
+
+		logger.Log.Info("nominee kafka publish goroutine completed")
+	}()
+
+	return nil
 }
 
 func (e *AccountNomineeExecutor) handleUpdate(ctx context.Context, rawPayload []byte) error {

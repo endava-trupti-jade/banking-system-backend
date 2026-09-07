@@ -59,12 +59,10 @@ func (s *NomineeService) CreateNominee(ctx context.Context, loggedInUserID primi
 		return nil, err
 	}
 
-	log.Info("nominee already exists",
-		zap.String("nominee_id", existing.ID.Hex()),
-	)
-
 	if existing != nil {
-		log.Info("Nominee already exists, reusing.")
+		log.Info("nominee already exists, reusing.",
+			zap.String("nominee_id", existing.ID.Hex()),
+		)
 		//return existing, nil
 		return nil, constants.ErrNomineeMobileOrEmailAlreadyExists
 	}

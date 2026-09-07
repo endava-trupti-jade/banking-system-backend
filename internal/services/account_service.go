@@ -103,7 +103,7 @@ func (s *AccountService) validateCreateAccountRequest(
 		return primitive.NilObjectID, constants.ErrInvalidUser
 	}
 
-	// // Fetch Customer (IMPORTANT CHANGE)
+	// Fetch Customer (IMPORTANT CHANGE)
 	customer, err := s.customerRepo.GetByUserID(ctx, accountOwnerID)
 	if err != nil {
 		log.Warn("customer not found", zap.Error(err))

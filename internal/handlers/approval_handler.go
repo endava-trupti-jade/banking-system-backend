@@ -97,21 +97,23 @@ func (h *ApprovalHandler) Approve(c *gin.Context) {
 
 	log.Info("ApprovalHandler Approve requestID=%s", zap.String("request_id", requestIDHex))
 
-	checkerID := c.MustGet("userID").(primitive.ObjectID)
+	// checkerID := c.MustGet("userID").(primitive.ObjectID)
+	authCtx := requestctx.MustGetAuth(c)
+	checkerID := authCtx.UserID
 	if checkerID == primitive.NilObjectID {
 		log.Warn("invalid checker ID")
 		utils.Error400(c, constants.ErrInvalidCheckerID)
 		return
 	}
 
-	role := strings.TrimSpace(c.GetString("role"))
+	//role := strings.TrimSpace(c.GetString("role"))
 	rolePolicies := c.GetStringSlice("policies")
 
 	err = h.approvalService.Decide(
 		c.Request.Context(),
 		requestID,
 		checkerID,
-		role,
+		authCtx.Role,
 		rolePolicies,
 		constants.ActionApprove,
 		"",

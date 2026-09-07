@@ -70,7 +70,7 @@ func AuthMiddleware() gin.HandlerFunc {
 		// update request context
 		c.Request = c.Request.WithContext(ctx)
 
-		log.Info("User authenticated", zap.String("userID", userIDHex), zap.String("role", role))
+		log.Info("User authenticated")
 
 		authCtx := &requestctx.AuthContext{
 			UserID: userID,
